@@ -22,18 +22,18 @@ class Critic(nn.Module):
         # Combined state-action input
         input_dim = obs_dim + action_dim
         self.critic1 = nn.Sequential(
-            nn.Linear(input_dim, 256),
+            nn.Linear(input_dim, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(256, 1)
+            nn.Linear(128, 1)
         )
         self.critic2 = nn.Sequential(
-            nn.Linear(input_dim, 256),
+            nn.Linear(input_dim, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(256, 1)
+            nn.Linear(128, 1)
         )
 
     def forward(self, state, action):
@@ -49,13 +49,13 @@ class Actor(nn.Module):
     def __init__(self, obs_dim, action_dim, max_action=1.0): # max_action for scaling
         super().__init__()
         self.actor_base = nn.Sequential(
-            nn.Linear(obs_dim, 256),
+            nn.Linear(obs_dim, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 128),
             nn.ReLU(),
         )
-        self.actor_mean = nn.Linear(256, action_dim)
-        self.actor_log_std = nn.Linear(256, action_dim)
+        self.actor_mean = nn.Linear(128, action_dim)
+        self.actor_log_std = nn.Linear(128, action_dim)
         
         # Action scaling: SAC actions are tanh squashed to [-1, 1], then scaled to env limits.
         # Humanoid-walk typically has action bounds of [-1, 1], so max_action is 1.0.
@@ -187,7 +187,7 @@ class Agent:
 
         self.q_optimizer.zero_grad()
         q_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=1.0) # Optional gradient clipping
+        torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=1.0) # Optional gradient clipping
         self.q_optimizer.step()
 
         # --- Update Actor and Alpha ---
@@ -202,7 +202,7 @@ class Agent:
 
         self.p_optimizer.zero_grad()
         policy_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(self.p_net.parameters(), max_norm=1.0) # Optional
+        torch.nn.utils.clip_grad_norm_(self.p_net.parameters(), max_norm=1.0) # Optional
         self.p_optimizer.step()
 
         # Unfreeze Q-networks
@@ -285,7 +285,7 @@ def train_sac_main_loop(agent, env, total_timesteps=1000000, log_interval=1000, 
     episode_num = 0
     rewards_history = []
     best_mean_reward = -float('inf')
-
+    episode_limit = 200
     for t_step in range(1, total_timesteps + 1):
         episode_timesteps += 1
 
@@ -294,20 +294,7 @@ def train_sac_main_loop(agent, env, total_timesteps=1000000, log_interval=1000, 
         else:
             action = agent.select_action(obs) # Use current observation
 
-        next_raw_obs, reward, terminated, truncated, info = env.step(action)
-        
-        # Process next_obs similarly to initial obs
-        if isinstance(next_raw_obs, dict):
-            try:
-                if 'observations' in next_raw_obs: next_obs = next_raw_obs['observations']
-                elif 'state' in next_raw_obs: next_obs = next_raw_obs['state']
-                else:
-                    next_obs = np.concatenate([v.ravel() if isinstance(v, np.ndarray) else np.array([v]) for k, v in next_raw_obs.items() if isinstance(v, (np.ndarray, float, int))]).astype(np.float32)
-            except Exception as e:
-                print(f"Error processing next_obs dictionary: {next_raw_obs}. Error: {e}")
-                next_obs = next_raw_obs # Fallback
-        else:
-            next_obs = next_raw_obs
+        next_obs, reward, terminated, truncated, info = env.step(action)
         next_obs = np.asarray(next_obs, dtype=np.float32)
         
         done = terminated or truncated
@@ -323,10 +310,11 @@ def train_sac_main_loop(agent, env, total_timesteps=1000000, log_interval=1000, 
                 q_loss, p_loss, alpha_loss, current_alpha = loss_info
                 print(f"T: {t_step}, Ep: {episode_num}, EpSteps: {episode_timesteps}, QL: {q_loss:.2f}, PL: {p_loss:.2f}, AlphaL: {alpha_loss:.2f}, Alpha: {current_alpha:.3f}, EpR: {episode_reward:.2f} (ongoing)")
 
-        if done:
+        if done or episode_timesteps == episode_limit:
             rewards_history.append(episode_reward)
             mean_reward_last_100 = np.mean(rewards_history[-100:]) if rewards_history else -float('inf')
-            
+            if mean_reward_last_100 > episode_limit * 0.4:
+                episode_limit += 200            
             print(f"Total T: {t_step}, Episode: {episode_num + 1}, Episode Steps: {episode_timesteps}, Reward: {episode_reward:.3f}, Mean Reward (last 100): {mean_reward_last_100:.3f}")
             
             if episode_num % save_interval_eps == 0 and episode_num > 0:
@@ -372,7 +360,7 @@ if __name__ == "__main__":
                   action_dim=action_dim,
                   action_space=action_space, # Pass the action_space object
                   learn_start=0,        # Your original value
-                  lr=3e-4,                  # Common SAC LR
+                  lr=0.001,                  # Common SAC LR
                   initial_alpha=0.8,        # A common starting alpha
                   buffer_size=1000000,
                   batch_size=256,
@@ -388,8 +376,8 @@ if __name__ == "__main__":
 
     print(f"Using device: {device}")
     print(f"Starting training with Agent: obs_dim={obs_dim}, action_dim={action_dim}, max_action={agent.max_action}")
-    agent.load('humanoid_sac')
-    train_sac_main_loop(agent, env, total_timesteps=2000000, log_interval=5000, save_interval_eps=20)
+    #agent.load('humanoid_sac_final')
+    train_sac_main_loop(agent, env, total_timesteps=10000000, log_interval=5000, save_interval_eps=20)
 
     env.close()
     agent.save(filepath='humanoid_sac_final')
