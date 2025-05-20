@@ -11,4 +11,4 @@ class Agent(object):
         self.action_space = gym.spaces.Box(-1.0, 1.0, (21,), np.float64)
 
     def act(self, observation):
-        return self.agent.select_action(observation,evaluate=True)
+        return s_agent.select_action(observation,evaluate=True)
